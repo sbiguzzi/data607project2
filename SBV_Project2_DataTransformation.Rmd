@@ -1,0 +1,859 @@
+---
+title: "Project 2 - Data Transformation"
+author: "Stefano Biguzzi"
+date: "9/28/2020"
+output:
+  html_document:
+    includes:
+      in_header: header.html
+    # css: ./project.css
+    highlight: pygments
+    theme: cerulean
+    toc: false
+  pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, warning=F, message=F, comment=NA)
+```
+
+# <span style="color: #969696;">Introduction
+
+<span style="color: #969696;">
+The goal of this assignment is to give you practice in preparing different datasets for downstream analysis work. Your task is to:  
+
+<span style="color: #969696;">
+**(1)**&nbsp;&nbsp;Choose any three of the “wide” datasets identified in the Week 6 Discussion items. (You may use your own dataset; please don’t use my Sample Post dataset, since that was used in your Week 5 assignment!) For each of the three chosen datasets:
+
+  * <span style="color: #969696;">Create a .CSV file (or optionally, a MySQL database!) that includes all of the information
+included in the dataset. You’re encouraged to use a “wide” structure similar to how the information appears in the discussion item, so that you can practice tidying and transformations as described below.
+  * <span style="color: #969696;">Read the information from your .CSV file into R, and use tidyr and dplyr as needed to tidy and transform your data. [Most of your grade will be based on this step!]
+  * <span style="color: #969696;">Perform the analysis requested in the discussion item.
+  * <span style="color: #969696;">Your code should be in an R Markdown file, posted to rpubs.com, and should include narrative descriptions of your data cleanup work, analysis, and conclusions.
+
+<span style="color: #969696;">
+**(2)**&nbsp;&nbsp;Please include in your homework submission, for each of the three chosen datasets:  
+
+  * <span style="color: #969696;">The URL to the .Rmd file in your GitHub repository, and
+  * <span style="color: #969696;">The URL for your rpubs.com web page.</span>
+
+# Loading libraries
+Load the required libraries for the Rmd file to run
+```{r, results='hide', message=F, comment=NA, warning=F}
+library(tidyverse)
+library(RCurl)
+library(dplyr)
+library(knitr)
+library(cowplot)
+library(rvest)
+```
+
+# Datasets {.tabset .tabset-fade}
+
+## 1. College data
+### Introduction
+
+The link for this data was provided in the CUNY SPS DATA 607 discussion thread for Week 5.  
+**Author**: Donghwan Kim  
+**Date:** Saturday, September 26, 2020 10:53:46 AM EDT  
+**Subject:** [Student's Residency](https://bbhosted.cuny.edu/webapps/discussionboard/do/message?action=list_messages&course_id=_1915124_1&nav=discussion_board_entry&conf_id=_2122269_1&forum_id=_2473265_1&message_id=_42545770_1#).
+
+The data was then accessed from the [Kent State SPSS Tutorial](https://libguides.library.kent.edu/SPSS/Crosstabs) page on Monday, September 28, 2020 12:35:46 PM EDT. It was the last table on the page titled: **Class Rank \*Do you live on campus?\* State of residence Crosstabulation**
+
+### Load and transform data {.tabset .tabset-fade}
+#### Steps to load data
+
+1. Read url csv contents into a string
+```{r}
+livingdata <-
+  getURL("https://raw.githubusercontent.com/sbiguzzi/data607project2/master/class-rank-table.csv")
+```
+
+2. Read the text contents as a csv and convert to dataframe
+```{r}
+college <- read.csv(text = livingdata)
+```
+
+#### Steps to transform data
+
+1. Renaming columns
+```{r}
+college <-
+  rename(college, c("State" = "X.U.FEFF.State.of.residence", "Class"  = "X.1",
+                    "OffCampus" = "Do.you.live.on.campus", "OnCampus" = "X.2"))
+```
+
+2. Fill blanks
+```{r}
+#Convert blanks to NAs
+college <- na_if(college,"")
+
+#Fill resident types
+college <- fill(college,State,.direction = "down")
+
+#Replace class rank na with total
+college$Class <- ifelse(is.na(college$Class),"Total",college$Class)
+```
+
+3. Drop extra rows and columns
+```{r}
+#Drop rows and columns
+college <- college[!(college$State=="Total" | college$Class=="Total"),-c(2,6)]
+
+#Reset index
+rownames(college) <- NULL
+```
+
+4. Convert data to long format
+```{r}
+#Create long data
+college <- college %>%
+  gather(Residence,Students,OffCampus:OnCampus, factor_key = TRUE)
+
+#Convert student column to numeric
+college$Students <- as.numeric(college$Students)
+```
+
+5. Creating columns for graphs
+```{r}
+#Create percent change
+college <- college %>%
+  group_by(State,Residence) %>%
+  mutate(residence_pctchg = ((lead(Students)-Students)/Students))
+
+#Create percent residence by  class
+college <- college %>%
+  group_by(State,Residence) %>%
+  mutate(percent_residence = Students/(Students+lead(Students)))
+
+college$percent_residence <-
+  ifelse(is.na(college$percent_residence), 1-lag(college$percent_residence), college$percent_residence)
+```
+
+### Analyze data {.tabset .tab-fade}
+
+#### What amount of students make up the on- and off- campus status by in state and out of state?  
+
+<div style="margin-bottom:30px">The percent of students who live on-campus is disproportionately underclassmen. For both in state and out of state, underclassmen make up approximately 94% of students living on campus, while upperclassmen make up 65% and 75% of off campus residents for both in state and out of state students, respectively.</div>
+
+```{r, results='asis',echo=F}
+choice_plot <-
+  ggplot(college, aes(fill = Class, x = State, y = percent_residence)) +
+  geom_bar(position="fill", stat="identity") +
+  geom_text(
+    data = college,
+    aes(
+      label = paste(round(percent_residence*100,0),"%",sep=""),
+      y = percent_residence,
+      fontface='bold'),
+    color = ifelse(college$Class=='Underclassman','black','white'),
+    size = 4,
+    vjust = 1.2,
+    position = position_stack()) +
+  scale_fill_manual(breaks = college$Class, values = c("#A8BF9B","#567048")) +
+  ggtitle("FIGURE 1: Percent of students living on- or off-campus by state") +
+  xlab(element_blank()) +
+  ylab("Percent of Students") +
+  scale_y_continuous(expand = expansion(mult = c(0,.01))) +
+  facet_wrap(~Residence, labeller = labeller(Residence = 
+    c("OffCampus" = "Off Campus",
+      "OnCampus" = "On Campus")))
+  
+theme <-
+  theme(
+    plot.title = element_text(size = 12, color = "#545454"),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black"),
+    axis.ticks = element_blank(),
+    axis.text.x = element_text(size = 12, vjust=2),
+    axis.text.y = element_blank(),
+    legend.title = element_blank(),
+    strip.background = element_rect(fill="white"),
+    strip.text = element_text(face = 'bold',size = 14))
+
+choice_plot + theme
+```
+
+#### What is the increase in students living on campus vs off campus as they move grades for in state vs out of state students?
+
+<div style="margin-bottom:30px">The change in student's who live on campus vs off campus as they change from underclassmen to upperclassmen is not affected by whether they are out of state students or in state students. The number of student who live on-campus decreases by approximately 93% for both in state and out of state students. This is contrasted by the 86% and 200% increase in students living off-campus for in state and out of state students respectively.</div>
+
+```{r, echo=F}
+#Create college in state labels
+college_statelabel <-
+  subset(college,State=="In state" & (!is.na(college$residence_pctchg)))
+
+#In state plot
+college1 <-
+  ggplot(
+    subset(college,State=="In state"),
+    aes(x=Students,y=as.numeric(Residence))) +
+  geom_point(size=5,aes(color= Class)) +
+  geom_label(
+    aes(
+      x = Students,
+      y = as.numeric(Residence),
+      label = Students,
+      color = Class,
+      fontface = 'bold'
+    ),
+    vjust = ifelse(
+      subset(college,State=="In state")$Residence == 'OnCampus',-0.3,1.2),
+    label.size = 0,
+    fill = alpha(c("white"),0.1),
+    show.legend = FALSE) +
+  scale_y_continuous(
+    expand = c(0,1),
+    breaks=c(1,2),
+    labels= c("Off-Campus","On-Campus"),
+    limits=c(1,2)) +
+  scale_color_manual(
+    breaks = college$Class, values = c("#A8BF9B","#567048")) +
+  scale_x_continuous(expand = expansion(mult = c(0.059,.061))) +
+  geom_segment(
+    data = reshape(
+      as.data.frame(subset(college,State=="In state")[,-c(5:6)]),
+      v.names = "Students",
+      idvar = c("State","Residence"),
+      timevar = "Class", direction = "wide"),
+    aes(
+      x=Students.Underclassman,
+      xend=Students.Upperclassman,
+      y=as.numeric(Residence),
+      yend=as.numeric(Residence)),
+    size = 1,
+    arrow = arrow(length = unit(0.3, "cm")),colour=c("#63ACBE","#CA3C25")) +
+  geom_label(
+    data = college_statelabel,
+    aes(
+      x=Students,
+      y=as.numeric(Residence),
+      label=paste(round(residence_pctchg*100,2),'%',sep=""),
+      fontface = "bold"),
+    vjust = ifelse(college_statelabel$Residence=='OnCampus',-0.1,0.9),
+    hjust = ifelse(college_statelabel$Residence=='OnCampus',2.6,-0.65),
+    label.size = 0,
+    fill = alpha(c("white"),0.1),
+    color = ifelse(
+      college_statelabel$residence_pctchg>0,
+      '#63ACBE',
+      '#CA3C25')) +
+  ylab(element_blank()) +
+  xlab("In State") +
+  theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = '#F5F5F5'),
+    axis.line = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(angle = 90,size = 14, hjust = 0.5),
+    axis.title.x = element_text(size = 14, color = '#5C5C5C'),
+    legend.title = element_blank(),
+    legend.key = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size=10),
+    legend.position = c(0.55, 0.91),
+    legend.direction = 'horizontal')
+
+#Create college out of state labels
+college_outstatelabel <-
+  subset(college,State=="Out of state" & (!is.na(college$residence_pctchg)))
+
+#Out of state plot
+college2 <-
+  ggplot(
+    subset(college,State=="Out of state"), aes(x=Students,y=as.numeric(Residence))) +
+  geom_point(size=5,aes(color= Class), show.legend = FALSE) +
+  geom_label(
+    aes(
+      x = Students,
+      y = as.numeric(Residence),
+      label = Students,
+      color = Class,
+      fontface = 'bold'
+    ),
+    vjust = ifelse(
+      subset(college,State=="Out of state")$Residence=='OnCampus',-0.3,1.2),
+    label.size = 0,
+    fill = alpha(c("white"),0.1),
+    show.legend = FALSE) +
+  scale_y_continuous(
+    expand = c(0,1),
+    breaks=c(1,2),
+    labels= c("Off-Campus","On-Campus"),
+    limits=c(1,2)) +
+  scale_color_manual(
+    breaks = college$Class, values = c("#A8BF9B","#567048")) +
+  scale_x_continuous(expand = expansion(mult = c(0.059,0.061))) +
+  geom_segment(
+    data = reshape(
+      as.data.frame(subset(college,State=="Out of state")[,-c(5:6)]),
+      v.names = "Students",
+      idvar = c("State","Residence"),
+      timevar = "Class", direction = "wide"),
+    aes(
+      x=Students.Underclassman,
+      xend=Students.Upperclassman,
+      y=as.numeric(Residence),
+      yend=as.numeric(Residence)
+    ),
+    size = 1,
+    arrow = arrow(length = unit(0.3, "cm")),colour=c("#63ACBE","#CA3C25"),
+    show.legend = FALSE) +
+  geom_label(
+    data = college_outstatelabel,
+    aes(
+      x=Students,
+      y=as.numeric(Residence),
+      label=paste(round(residence_pctchg*100,2),'%',sep=""),
+      fontface = "bold"),
+    vjust = ifelse(college_outstatelabel$Residence=='OnCampus',-0.1,0.9),
+    hjust = ifelse(college_outstatelabel$Residence=='OnCampus',2.2,-1.8),
+    label.size = 0,
+    fill = alpha(c("white"),0.1),
+    color = ifelse(
+      college_outstatelabel$residence_pctchg>0,'#63ACBE','#CA3C25'),
+    show.legend = FALSE) +
+  ylab(element_blank()) +
+  xlab("Out of state") +
+  theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = '#EBEBEB'),
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    axis.title.x = element_text(size = 14, color = '#5C5C5C'),
+    legend.title = element_blank(),
+    legend.key=element_blank())
+
+college.title <- ggdraw() +
+  draw_label(
+    "FIGURE 2: In state vs out of state change in residence",
+    size = 12,
+    color = "#545454",
+    x = 0,
+    hjust = 0) +
+  theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 7))
+
+college.row <- plot_grid(college1,college2)
+
+plot_grid(college.title,college.row,ncol = 1, rel_heights = c(0.1,1))
+```
+
+
+### Conclusion
+From both `Figure 1` and `Figure 2`, it's clear that off-campus residents are primarily upperclassmen while on-campus residents are primarily underclassmen. Whether they are in state or out of state students has no bearing on a student lives on-campus or off-campus. It would be interesting to find out if this particular college has a rule in place at this college that doesn't allow underclassmen to live off-campus. 
+
+***
+
+## 2. Energy data
+### Introduction
+
+The link for this data was provided in the CUNY SPS DATA 607 discussion thread for Week 5.  
+**Author:** Peter Fernandes  
+**Date:** Friday, September 25, 2020 3:48:43 AM EDT  
+**Subject:** [NYC per-capita fuel consumption and CO2 emissions](https://bbhosted.cuny.edu/webapps/discussionboard/do/message?action=list_messages&course_id=_1915124_1&nav=discussion_board_entry&conf_id=_2122269_1&forum_id=_2473265_1&message_id=_42571820_1).
+
+The data was then accessed from the [The Contribution of Urban Areas to Climate Change: New York City Case Study](https://www.researchgate.net/publication/265882546_The_contribution_of_urban_areas_to_climate_change_New_York_City_case_study) page on Tuesday, September 29, 2020 08:56 PM EDT. Under the *Figures* section, click until you reach [**Table 3**](https://www.researchgate.net/figure/Average-per-capita-fuel-consumption-and-CO-2-emissions-for-subsets-of-counties-in-the_tbl2_265882546).
+
+\* *I did not add the the NY Metro Area, United States, Tri-State Area, or New York City averages because the assignment required to find some of these numbers.* \*
+
+### Load and transform data {.tabset .tabset-fade}
+#### Steps to load data
+
+1. Read url csv contents into a string
+```{r}
+energydata <-
+  getURL("https://raw.githubusercontent.com/sbiguzzi/data607project2/master/fuel-consumption.csv")
+```
+
+2. Read the text contents as a csv and convert to dataframe
+```{r}
+energy.data <- as.data.frame(read.csv(text = energydata))
+```
+
+#### Steps to tranform data
+
+1. Renaming columns
+```{r}
+energy.data <-
+  rename(energy.data, c("Area" = "X.U.FEFF.Category....of.counties.",
+                        "BuildingAndIndustry_GJ" = "Building.and.Industry",
+                        "BuildingAndIndustry_MtCO2" = "X",
+                        "Transportation_GJ" = "Transportation",
+                        "Transportation_MtCO2" = "X.1"))
+```
+
+2. Dropping first row
+```{r}
+#Dropping row
+energy.data <- energy.data[-1,]
+#Reset index
+rownames(energy.data) <- NULL
+```
+
+3. Split first column into 3 columns: Area, LandType, LandTypeCount
+```{r}
+#Create land type column
+energy.data$LandType <-
+  gsub(".*\\s+(.*)+\\s\\(.*","\\1",energy.data$Area)
+#Create land type count
+energy.data$LandTypeCount <-
+  as.integer(gsub(".*\\(+(.*)+\\)","\\1",energy.data$Area))
+#Create area column
+energy.data$Area <- gsub(" .*$","",energy.data$Area)
+```
+
+4. Create long format
+```{r}
+#Create long format
+energy.data <- energy.data %>%
+  gather(Industry,Consumption,BuildingAndIndustry_GJ:Transportation_MtCO2, factor_key = TRUE)
+#Change consumption to numeric
+energy.data$Consumption <- as.numeric(energy.data$Consumption)
+```
+
+5. Break up industry and energy type
+```{r}
+#Create energy type column
+energy.data$EnergyType <-
+  factor(gsub(".*_(.*)","\\1",energy.data$Industry), levels = c("GJ","MtCO2"))
+#Update industry column
+energy.data$Industry <- gsub("(.*)_.*","\\1",energy.data$Industry)
+```
+
+6. Create statistics for analysis
+```{r}
+#Create average consumption by area and fuel type
+energy.data <- energy.data %>%
+  group_by(Area,EnergyType) %>%
+  mutate(area_consumption = mean(Consumption))
+#Create average consumption by area and industry type
+energy.data <- energy.data %>%
+  group_by(Area,Industry,EnergyType) %>%
+  mutate(area_industry_consumption = mean(Consumption))
+```
+
+### Analysis{.tabset .tabset-fade}
+
+#### What is the average energy consumption and CO${_2}$ emissions by area?
+
+The NYC metro area used 22.13 gigajoules (GJ) of energy per capita less than the United States for fiscal year 2007. However, for the same fiscal year, the metric tons of CO${_2}$ that were emitted in NYC were only slightly less than the US per capita, with a difference of 0.95 Metric Tons (Mt). Is there a specific industry that drove the emissions per capita rate for NYC to be closer to that of the US vs the per capita rate of energy consumption?
+
+```{r, echo=F, results='asis'}
+#Create dataset for graph
+area.data <-
+  unique(energy.data[,c("Area","EnergyType","area_consumption")])
+
+#Create avg fuel and emission plots for ny and us
+ggplot(area.data, 
+       aes(x = EnergyType, y = area_consumption, fill = Area)) +
+  geom_bar(
+    width = 0.6,
+    position = position_dodge(width=0.7),
+    stat="identity") +
+  scale_fill_manual(values =  c("#81B06D","#4092C9")) +
+  geom_text(
+    data = area.data,
+    aes(
+      x = EnergyType,
+      y = area_consumption,
+      label = 
+        ifelse(area.data$EnergyType == "GJ",
+          paste(round(area_consumption,1),EnergyType,sep = " "),
+          paste(round(area_consumption,1),"Mt",sep = " "))),
+    color = ifelse(area.data$Area == "NY","#81B06D", "#4092C9"),
+    position=position_dodge(width=0.7),
+    fontface = 'bold',
+    size = 4.5,
+    vjust = -0.3,
+    show.legend = FALSE) +
+  ggtitle(
+    "FIGURE 1: Average per Capita Fuel Consumption and Emissions by State") +
+  scale_y_continuous(expand = expansion(mult = c(0,0.1))) +
+  scale_x_discrete(
+    breaks=c("GJ","MtCO2"),
+    labels=c("Energy Consumption",expression("CO"[2]*" Emissions"))) +
+  theme(
+    plot.title = element_text(size = 12, hjust = 0, color = '#545454'),
+    axis.line.x = element_line(color = 'grey'),
+    axis.line.y = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10),
+    legend.position = c(0.8, 0.9),
+    legend.key=element_blank(),
+    legend.direction="horizontal")
+```
+
+#### Are there any outliers in the data?
+
+The outlier for NY has a skewing effect on the mean energy consumption and CO${_2}$ emission. Mean CO${_2}$ emissions for NY metro area was 5.6 Mt while the median CO${_2}$ emissions was just 3.5 Mt. Mean energy consumption for for NY metro area was 86.3 GJ, while the median was only 56.8 GJ. While there is a a difference between the mean US energy consumption(108.4 GJ) and median energy consumption (96.4 GJ), the median and mean for US CO${_2}$ emissions were 6.4 and 6.6 Mt, respectively.
+
+```{r, echo=F, results='asis'}
+#Create outlier function
+is_outlier <- function(x) {
+  return(
+    x < quantile(x, 0.25) - 1.5 * IQR(x) |
+      x > quantile(x, 0.75) + 1.5 * IQR(x))
+}
+#Create consumption outlier column
+energy.data <- energy.data %>%
+  group_by(Area,EnergyType) %>%
+  mutate(outlier = ifelse(
+    is_outlier(Consumption),Consumption,as.numeric(NA)))
+
+#Create facet wrap labels
+energy.labs <-
+  c('Energy Consumption in GJ', 'CO2 Emissions in Mt')
+names(energy.labs) <- c("GJ", "MtCO2")
+
+#Create median label
+med.label <- energy.data[,c("Area","EnergyType","Consumption")] %>%
+  group_by(Area,EnergyType) %>%
+  summarise(med = median(Consumption))
+
+#Create plot
+ggplot(energy.data, aes(x = Area, y = Consumption, fill = Area)) +
+  geom_boxplot(width=0.4,show.legend = FALSE) +
+  geom_label(
+    data = subset(energy.data,!(is.na(outlier))),
+    aes(
+      x = Area,
+      y = Consumption,
+      label = outlier),
+    color = ifelse(subset(energy.data,!(is.na(outlier)))$Area == "NY","#81B06D","#4092C9"),
+    fill = 'transparent',
+    fontface = 'bold',
+    label.size = 0,
+    hjust = 1
+  ) +
+  geom_text(
+    data = med.label,
+    aes(x = Area, y = med, label = round(med,1), fontface = 'bold'),
+    color = ifelse(med.label$Area == 'NY',"#81B06D","#4092C9"),
+    hjust = ifelse(med.label$EnergyType == 'GJ',-0.7,-1.07)) +
+  scale_fill_manual(values =  c("#81B06D","#4092C9")) +
+  scale_x_discrete(expand = expansion(mult = c(1,1.5))) +
+  ggtitle(expression(
+    'FIGURE 2: Energy consumption and CO'[2]*' emission boxplots')) +
+  theme(
+    panel.background = element_blank(),
+    plot.title = element_text(size = 12, hjust = 0, color = '#545454'),
+    strip.background = element_rect(
+      color = 'black', size = 0.5, fill = '#F5F5F5'),
+    strip.text = element_text(colour = 'black'),
+    axis.line = element_line(),
+    axis.text.x = element_text(size = 10),
+    axis.title.x = element_blank()) +
+  facet_wrap(
+    ~EnergyType,
+    labeller = labeller(EnergyType = energy.labs),
+    scales = 'free')
+```
+
+#### What is the average energy consumption and CO${_2}$ emissions by area and industry?
+
+The outliers are most likely under the transportation label for both energy consumption and CO$_{2}$ emissions. The average transportation energy consumption in NY was `r round((128.7-102.7)/102.7,3)` more than the US and the CO$_{2}$ emissions of the transportation industry in NY were `r round((8.6-6.9)/6.9,3)` more than the transportation emissions in the US. Conversely, the building and industry sector in NY had a rate of energy consumption `r round(abs(43.9-114.1)/114.1,3)` lower than the US, and a rate of CO$_{2}$ emissions `r round(abs(2.7-6.2)/6.2,3)` lower than the US.
+
+```{r, echo = F, results='asis'}
+#Create industry label
+industry.labs <-
+  distinct(energy.data[,c("Industry","area_industry_consumption","Area","EnergyType")])
+
+#Order industry labels for label color purposes
+industry.labs <- industry.labs[order(industry.labs$Industry,industry.labs$EnergyType),]
+
+#Create plot
+ggplot(energy.data,
+       aes(x = Industry, y = area_industry_consumption, fill = Area)) +
+  geom_bar(
+    position = position_dodge(width = 0.8), stat="identity", width=0.7) +
+  geom_text(
+    data = industry.labs,
+    aes(
+      x = Industry,
+      y = area_industry_consumption,
+      label = round(area_industry_consumption,1)),
+    color = ifelse(industry.labs$Area == 'NY',"#81B06D","#4092C9"),
+    position = position_dodge(width = 0.8),
+    fontface = 'bold',
+    size = 3,
+    vjust = -0.4,
+    show.legend = FALSE) +
+  scale_fill_manual(values =  c("#81B06D", "#4092C9")) +
+  scale_y_continuous(expand = expansion(mult = c(0,0.2))) +
+  scale_x_discrete(
+    breaks=c("BuildingAndIndustry","Transportation"),
+    labels=c("Building And Industry", "Transportation")) +
+  ylab(element_blank()) +
+  ggtitle(expression('FIGURE 3: Energy consumption and CO'[2]*' emission by area and industry')) +
+  theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 12, hjust = 0, color = '#545454'),
+    strip.background = element_rect(color = 'black', size = 0.5, fill = '#F5F5F5'),
+    strip.text = element_text(colour = 'black'),
+    axis.line = element_line(),
+    axis.ticks = element_blank(),
+    axis.text.x = element_text(size = 9),
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 8),
+    legend.background = element_blank(),
+    legend.direction = 'vertical',
+    legend.position = 'left') +
+  facet_wrap(
+    ~EnergyType,
+    scales = 'free',
+    labeller = labeller(EnergyType = energy.labs))
+```
+
+### Conclusion
+
+The transportation outliers increase the average energy consumption and C0$_{2}$ emissions for NY, which skews the data and does not show the full picture, especially for C0$_{2}$ emissions. When splitting up the emissions by sector NY Metro area seems to be doing much better than the United States. Looking at the data even closer we see that the real outliers are being driven by the one mixed urban county, Putnam County, for NY metro area. One solution to this would be to use weighted averages when calculating the average consumption and emission for NY Metro Area.
+
+One note about the data and the accuracy of the analysis. It's unknown whether the US counts include the NY Metro Area or not. It would be nice to know and also would make for a more accurate comparison when comparing the  NY metro area to the rest of the US.
+
+For future analysis it would be good to understand, one, what is driving the transportation fuel consumption and CO$_{2}$ emission in Putnam County. Additionally, for future analysis it might be more accurate to use a weighted average with the weight being equal to the percent make-up of counties in NY metro area. And finally, it might be more interesting to compare NY Metro Area to other metro areas in the US and the world rather than all of the US.
+
+***
+
+## 3. State tax data
+### Introduction
+
+The link for this data was provided in the CUNY SPS DATA 607 discussion thread for Week 5.  
+**Author:** Karim Hammoud  
+**Date:** Monday, September 28, 2020 11:50:01 PM EDT  
+**Subject:** [New Hampshire state budget and finances](https://bbhosted.cuny.edu/webapps/discussionboard/do/message?action=list_messages&course_id=_1915124_1&nav=discussion_board_entry&conf_id=_2122269_1&forum_id=_2473265_1&message_id=_42575826_1)
+
+The data was then scraped from the BallotPedia page, [State government tax collections by source](https://ballotpedia.org/State_government_tax_collections_by_source) on Wednesday, September 30, 2020 10:00 PM EDT.
+
+The table that was scraped is titled **State tax collections by source ($ in thousands), 2016**
+
+### Load and transform data {.tabset .tabset-fade}
+#### Steps to load data
+
+1. Assign url
+```{r}
+url <- "https://ballotpedia.org/State_government_tax_collections_by_source"
+```
+
+2. Read the html code from the url
+```{r}
+page <- url %>%
+  read_html()
+```
+
+3. Grab table html elements
+```{r}
+tables <- page %>%
+  html_nodes('table')
+```
+
+4. Grab all the rows from the second table element  
+<font size="1">\**Note: I was lucky, the table I wanted was the second table element, I started from the first element and looked at the values until I saw the ones I wanted*</font>
+```{r}
+rows <- tables[2] %>%
+  html_nodes('tr')
+```
+
+5. Grab the text values from each cell from the second table element and enter them into a list
+```{r}
+values <- rows %>%
+  html_nodes('td') %>%
+  html_text() %>%
+  trimws()
+```
+
+6. Convert the list of values to a dataframe
+```{r}
+tax.data <- as.data.frame(matrix(values, ncol = 9, byrow=TRUE))
+```
+
+#### Steps to transform data
+
+1. Rename columns
+```{r}
+tax.data <- rename(tax.data,
+                   c("State" = "V1", "Property_Tax" = "V2",
+                     "Sales_and_gross_receipts" = "V3",
+                     "Licenses" = "V4", "Income_taxes" = "V5",
+                     "Other_taxes" = "V6","Total" = "V7",
+                     "Pop2016" = "V8", "PerCapitaRev" = "V9"))
+```
+
+2. Remove last two rows
+```{r}
+tax.data <- tax.data[-c(51,52),]
+```
+
+3. Convert "N/A" values to null
+```{r}
+tax.data <- tax.data %>%
+  mutate_if(is.character, list(~na_if(., "N/A")))
+```
+
+4. Parse numbers to make columns numeric
+```{r}
+for (i in names(tax.data)) {
+  if (i != "State"){
+    tax.data[,i] <- as.numeric(gsub("[\\$]|[,]","",tax.data[,i]))
+  }
+  else{
+    tax.data[,i] <- tax.data[,i]
+  }
+}
+```
+
+5. Create percent for each tax type
+```{r}
+for (i in names(tax.data[,c(2:6)])) {
+  tax.data[,paste(i,"pct",sep="_")] = round(tax.data[,i]/tax.data$Total,7)
+}
+```
+
+6. Create long tax percent dataframe
+```{r}
+#Convert to long
+tax.stacked <- tax.data[,c(1,10:14)] %>%
+  gather(TaxType,TaxPercent,Property_Tax_pct:Other_taxes_pct)
+
+tax.stacked <- tax.stacked[order(tax.stacked$State),]
+```
+
+### Analysis{.tabset .tabset-fade}
+
+#### What is the total tax revenue for each state?
+
+In the 2016 tax year some states collect a lot of tax revenue, while other states collected much less. To help put the data in perspective a median line was drawn in `Figure 1`. The median tax revenue for the 50 states in 2016 was 10.5M dollars. California was the top earning state with almost fifteen times the median at 155M dollars, while Alaska was at the lowest earning state with only around one tenth of the median at 1.04M dollars. Is this difference solely due to the population difference?
+
+
+```{r, echo=F, results='asis', fig.asp=1.3}
+ggplot(tax.data, aes(x = Total/10e5, y = reorder(State, Total))) +
+  geom_bar(stat = 'identity', fill='#A2C0CD', width = 0.8) +
+  geom_vline(
+    xintercept = median(tax.data$Total)/10e5,
+    color = '#BF222C',
+    size = 0.5,
+    linetype="longdash") +
+  geom_text(
+    aes(
+      x = median(Total)/10e5,
+      y = 0,
+      label = paste("Median",round(median(Total)/10e5,1),sep = " = ")),
+    size=3.5,
+    angle=270,
+    vjust=-0.7,
+    hjust=1.2,
+    color = '#BF222C',
+    family="serif") +
+  scale_x_continuous(expand = c(0,0),limits = c(0,161)) +
+  scale_y_discrete(expand = c(0,0)) +
+  ggtitle("FIGURE 1: 2016 tax revenue in millions of dollars") +
+  theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 13, color = '#545454'),
+    axis.line = element_line(size = 0.5, color  = '#999999'),
+    axis.title = element_blank(),
+    axis.text = element_text(size = 10, color = '#707070'))
+```
+
+#### What is the per capita tax revenue of each state?
+
+By normalizing the tax collected from total to per capita, it doesn't seem like the disparity between California's tax revenue and Alaska's tax revenue has to do with population. Alaska's per capita rate is $1,405 while California's is $3,955. Is there a difference in the make up of the total tax revenue between California and Alaska. That is, does the percent at which each tax category contributes to the total tax revenue differ between California and Alaska?
+
+```{r, echo=F, results='asis', fig.asp=1.3}
+ggplot(tax.data, aes(x = PerCapitaRev, y = reorder(State, PerCapitaRev))) +
+  geom_bar(stat = 'identity', fill='#A2C0CD', width = 0.8) +
+  geom_vline(
+    xintercept = median(tax.data$PerCapitaRev),
+    color = '#BF222C',
+    size = 0.5,
+    linetype="longdash") +
+  geom_text(
+    aes(
+      x = median(PerCapitaRev),
+      y = 0,
+      label = paste("Median",round(median(PerCapitaRev),0),sep = " = ")),
+    size=3.5,
+    angle=270,
+    vjust=-0.7,
+    hjust=1.2,
+    color = '#BF222C',
+    family="serif") +
+  scale_x_continuous(expand = c(0,0),limits = c(0,5100)) +
+  scale_y_discrete(expand = c(0,0)) +
+  ggtitle("FIGURE 2: 2016 per capita tax revenue") +
+  theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 13, color = '#545454'),
+    axis.line = element_line(size = 0.5, color  = '#999999'),
+    axis.title = element_blank(),
+    axis.text = element_text(size = 10, color = '#707070'))
+```
+
+#### What is the make-up of the total tax revenue by tax category for each state?
+
+Continuing our analysis from the previous section, California relies more on Income and Sales taxes, while Alaska has a pretty even distribution of all the five tax categories. It seems that the two states due differ in how much they rely on each tax category for the total tax revenue for 2016. There is not enough evidence to conclude that this is the only reason for a difference in tax revenue.
+
+```{r, echo=F,results='asis', fig.asp=1.3}
+#create order for state
+level_order <-
+  unique(tax.stacked[order(tax.stacked$State, decreasing = T),"State"])
+
+#Create heatmap
+ggplot(tax.stacked,aes(TaxType,factor(State,level_order),fill = TaxPercent)) +
+  geom_tile() +
+  scale_x_discrete(
+    expand = c(0,0),
+    name = 'Revenue',
+    breaks = c("Income_taxes_pct",
+               "Property_Tax_pct",
+               "Sales_and_gross_receipts_pct",
+               "Licenses_pct",
+               "Other_taxes_pct"),
+    labels = c("Income","Property","Sales","Licenses","Other"),
+    limits = c("Income_taxes_pct",
+               "Property_Tax_pct",
+               "Sales_and_gross_receipts_pct",
+               "Licenses_pct",
+               "Other_taxes_pct")) +
+  scale_y_discrete(expand = c(0,0)) +
+  scale_fill_gradient(name = "Percent of\n Revenue",
+                      low="#92B6DD", high="#13273E", na.value='#e5e5e5',
+                      breaks = c(0.02,0.85), labels = c("Low","High")) +
+  ggtitle(label = "FIGURE 3: 2016 State Revenue") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 13, color = "#545454"),
+    plot.subtitle = element_text(size = 11, color = "#8F8F8F"),
+    axis.title = element_blank(),
+    axis.text.y = element_text(size = 10, color = '#707070'),
+    axis.text.x = element_text(size = 14, color = '#707070'))
+```
+
+### Conclusion
+
+The difference between the highest earning state, California, and the lowest earning state, Alaska, is not based on population and cannot be solely attributed to the tax category. There must be something else that has to account for this difference. 
+
+One possible continuation of this analysis is looking at is tax rate for each tax category. The assumption here is that the difference is caused by tax rate. However, another possibility is the cost of living in California as a whole is higher than in Alaska. For example, if the income tax rates are the same, is California's average income higher than Alaska's, or is the price of goods in California greater than in Alaska. Additional data is needed to to continue this analysis.
+
+***
+
+<div class="tocify-extend-page" data-unique="tocify-extend-page" style="height: 0;"></div>
